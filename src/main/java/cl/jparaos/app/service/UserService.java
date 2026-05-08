@@ -1,107 +1,121 @@
 package cl.jparaos.app.service;
 
-import cl.jparaos.app.config.JwtTokenUtil;
-import cl.jparaos.app.exception.DuplicatedUserException;
-import cl.jparaos.app.exception.InvalidEmailException;
-import cl.jparaos.app.exception.InvalidPasswordException;
+import cl.jparaos.app.dto.PhoneDto;
+import cl.jparaos.app.dto.SignUpRequest;
+import cl.jparaos.app.dto.UserResponse;
 import cl.jparaos.app.exception.InvalidTokenException;
+import cl.jparaos.app.exception.UserAlreadyExistsException;
 import cl.jparaos.app.model.Phone;
 import cl.jparaos.app.model.User;
-import cl.jparaos.app.repository.PhoneRepository;
 import cl.jparaos.app.repository.UserRepository;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
-@Slf4j
 @Service
+@RequiredArgsConstructor
 public class UserService {
 
-    @Value("${pass.regex}")
-    String passRegex;
+    private final UserRepository userRepository;
+    private final JwtService jwtService;
+    private final ValidationService validationService;
+    private final PasswordEncoder passwordEncoder;
 
-    @Value("${email.regex}")
-    String emailRegex;
+    @Transactional
+    public UserResponse signUp(SignUpRequest request) {
+        // Validaciones con lanzamiento de excepciones manejadas por GlobalExceptionHandler
+        validationService.validateEmail(request.getEmail());
+        validationService.validatePassword(request.getPassword());
 
-    @Autowired
-    private UserRepository userRepository;
+        // Verificar si el usuario ya existe
+        userRepository.findByEmail(request.getEmail()).ifPresent(u -> {
+            throw new UserAlreadyExistsException(request.getEmail());
+        });
 
-    @Autowired
-    private PhoneRepository phoneRepository;
+        String token = jwtService.generateToken(request.getEmail());
 
-    @Autowired
-    private PasswordEncoder encoder;
+        // Java 8 feature: streams para mapear phones
+        List<Phone> phones = Optional.ofNullable(request.getPhones())
+                .orElse(Collections.emptyList())
+                .stream()
+                .map(dto -> Phone.builder()
+                        .number(dto.getNumber())
+                        .citycode(dto.getCitycode())
+                        .contrycode(dto.getContrycode())
+                        .build())
+                .collect(Collectors.toList());
 
-    @Autowired
-    private JwtTokenUtil tokenUtil;
+        User user = User.builder()
+                .name(request.getName())
+                .email(request.getEmail())
+                .password(passwordEncoder.encode(request.getPassword()))
+                .token(token)
+                .lastLogin(LocalDateTime.now())
+                .build();
 
-    public User createUser(User user) throws Exception{
-        User output;
-        List<Phone> phones = user.getPhones();
+        // Asociar phones al user después de crearlo
+        phones.forEach(p -> p.setUser(user));
+        user.getPhones().addAll(phones);
 
-        if(!validatePassword(user.getPassword()))
-            throw new InvalidPasswordException("Error registering user. Invalid password.",new Exception());
-
-        if(!validateEmail(user.getEmail()))
-            throw new InvalidEmailException("Error registering user. Invalid email.",new Exception());
-
-        if(getUserByEmail(user.getEmail())!=null)
-            throw new DuplicatedUserException("Error registering user. User email already exist.",new Exception());
-
-        user.setCreated(LocalDateTime.now());
-        user.setLastLogin(LocalDateTime.now());
-        user.setActive(true);
-        user.setPassword(encoder.encode(user.getPassword()));
-        String token = tokenUtil.doGenerateToken(user.getEmail());
-        user.setToken(token);
-
-        output = userRepository.save(user);
-        phoneRepository.saveAll(phones);
-
-        return output;
+        User saved = userRepository.save(user);
+        return toResponse(saved, request.getPassword()); // retornamos password en claro en sign-up
     }
 
-    public User getUserByEmail(String userEmail){
-        Optional<User> user = Optional.ofNullable(userRepository.getUserByEmail(userEmail));
-        return user.orElse(null);
-    }
+    @Transactional
+    public UserResponse login(String token) {
+        if (token == null || token.isBlank()) {
+            throw new InvalidTokenException("Token no proporcionado");
+        }
 
-    public User getUserByEmailAndToken(String userEmail, String token){
-        Optional<User> user = Optional.ofNullable(userRepository.getUserByEmailAndToken(userEmail,token));
-        return user.orElse(null);
-    }
+        // Limpiar "Bearer " si viene en el header
+        String cleanToken = token.startsWith("Bearer ") ? token.substring(7) : token;
 
-    public boolean validatePassword(String password){
-        Pattern pattern = Pattern.compile(passRegex);
-        return pattern.matcher(password).matches();
-    }
+        if (!jwtService.isTokenValid(cleanToken)) {
+            throw new InvalidTokenException("Token inválido o expirado");
+        }
 
-    public boolean validateEmail(String email){
-        Pattern pattern = Pattern.compile(emailRegex);
-        return pattern.matcher(email).matches();
-    }
+        String email = jwtService.extractEmail(cleanToken);
 
-    public User getUserByToken(String token) throws Exception{
+        // Java 8 feature: Optional con orElseThrow y lambda
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidTokenException("Usuario no encontrado para el token proporcionado"));
 
-        if (token == null || !tokenUtil.validateToken(token) || tokenUtil.isTokenExpired(token))
-            throw new InvalidTokenException("Error consulting user. Invalid token.",new Exception());
-
-        String email = tokenUtil.getUsernameFromToken(token);
-        log.info("user email = "+email);
-        User user=getUserByEmailAndToken(email,token);
-        if(user==null)
-            throw new InvalidTokenException("Error consulting user. Invalid token information.",new Exception());
-
-        user.setToken(tokenUtil.doGenerateToken(email));
+        // Generar nuevo token en cada login
+        String newToken = jwtService.generateToken(email);
+        user.setToken(newToken);
         user.setLastLogin(LocalDateTime.now());
 
-        return userRepository.save(user);
+        User updated = userRepository.save(user);
+        return toResponse(updated, null);
+    }
+
+    // Java 8 feature: stream + map para convertir phones a DTOs
+    private UserResponse toResponse(User user, String rawPassword) {
+        List<PhoneDto> phoneDtos = user.getPhones().stream()
+                .map(p -> PhoneDto.builder()
+                        .number(p.getNumber())
+                        .citycode(p.getCitycode())
+                        .contrycode(p.getContrycode())
+                        .build())
+                .collect(Collectors.toList());
+
+        return UserResponse.builder()
+                .id(user.getId())
+                .created(user.getCreated())
+                .lastLogin(user.getLastLogin())
+                .token(user.getToken())
+                .isActive(user.isActive())
+                .name(user.getName())
+                .email(user.getEmail())
+                .password(rawPassword != null ? rawPassword : user.getPassword())
+                .phones(phoneDtos)
+                .build();
     }
 }

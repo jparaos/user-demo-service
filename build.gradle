@@ -2,10 +2,11 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '2.5.14'
     id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+    id 'jacoco'
 }
 
-group = 'cl.jparaos'
-version = '1.0.1'
+group = 'cl.bci'
+version = '1.0.0'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -16,18 +17,40 @@ repositories {
     mavenCentral()
 }
 
-
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    implementation 'org.springframework.boot:spring-boot-starter-test'
     implementation 'org.springframework.boot:spring-boot-starter-security'
-    implementation 'com.h2database:h2:2.2.220'
+    implementation 'com.h2database:h2:2.1.214'
     implementation 'io.jsonwebtoken:jjwt:0.9.1'
     implementation 'org.projectlombok:lombok:1.18.22'
     annotationProcessor 'org.projectlombok:lombok:1.18.22'
+    // Necesario para jjwt en Java 11 (jaxb removido del JDK)
+    implementation 'javax.xml.bind:jaxb-api:2.3.1'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
 }
 
 test {
     useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.enabled true
+        html.enabled true
+    }
+}
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.80
+            }
+        }
+    }
 }

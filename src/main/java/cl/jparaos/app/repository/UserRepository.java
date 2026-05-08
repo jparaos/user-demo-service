@@ -2,10 +2,12 @@ package cl.jparaos.app.repository;
 
 import cl.jparaos.app.model.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+
+@Repository
 public interface UserRepository extends JpaRepository<User, String> {
-
-    User getUserByEmail(String email);
-    User getUserByEmailAndToken(String email, String token);
-
+    Optional<User> findByEmail(String email);
+    Optional<User> findByToken(String token);
 }

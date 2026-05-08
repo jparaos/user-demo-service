@@ -1,50 +1,54 @@
 package cl.jparaos.app.model;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
-import org.hibernate.annotations.GenericGenerator;
-import org.hibernate.annotations.Type;
+import lombok.NoArgsConstructor;
 
 import javax.persistence.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+@Entity
+@Table(name = "users")
 @Data
-@Entity(name = "users")
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class User {
 
     @Id
-    @GeneratedValue(generator = "UUID")
-    @GenericGenerator(name = "UUID", strategy = "org.hibernate.id.UUIDGenerator")
-    @Column(name = "id", updatable = false, nullable = false)
-    @Type(type = "org.hibernate.type.UUIDCharType")
-    private UUID id;
+    @Column(columnDefinition = "VARCHAR(36)")
+    private String id;
 
-    @Column(name = "name")
     private String name;
 
-    @Column(name = "email")
+    @Column(unique = true, nullable = false)
     private String email;
 
-    @Column(name = "password")
+    @Column(nullable = false)
     private String password;
 
-    @Column(name = "created")
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime created;
-
-    @Column(name = "lastLogin")
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime lastLogin;
-
-    @Column(name = "token")
     private String token;
-
-    @Column(name = "isActive")
     private boolean isActive;
 
-    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
-    @JoinColumn(name = "users_id")
-    private List<Phone> phones;
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
+    @Builder.Default
+    private List<Phone> phones = new ArrayList<>();
+
+    @PrePersist
+    public void prePersist() {
+        // Java 11 feature: UUID.randomUUID().toString() — uso explícito de API moderna
+        if (this.id == null) {
+            this.id = UUID.randomUUID().toString();
+        }
+        if (this.created == null) {
+            this.created = LocalDateTime.now();
+        }
+        this.isActive = true;
+    }
 }
